@@ -7,9 +7,11 @@ on:
     branches: [ main, master ]
 
 env:
+  # Определяем базовое имя образа в зависимости от наличия секрета
+  # Если секрет пуст (например, в PR) — используем локальное имя без префикса
   DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
-  BACKEND_IMAGE:  ${{ secrets.DOCKER_HUB_USERNAME }}/todo-backend
-  FRONTEND_IMAGE: ${{ secrets.DOCKER_HUB_USERNAME }}/todo-frontend
+  BACKEND_IMAGE:  ${{ secrets.DOCKER_HUB_USERNAME != '' && format('{0}/todo-backend', secrets.DOCKER_HUB_USERNAME) || 'todo-backend' }}
+  FRONTEND_IMAGE: ${{ secrets.DOCKER_HUB_USERNAME != '' && format('{0}/todo-frontend', secrets.DOCKER_HUB_USERNAME) || 'todo-frontend' }}
 
 jobs:
   build-test-push:
@@ -23,7 +25,22 @@ jobs:
       - name: 🔧 Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 🛡️ Проверка, что секреты заданы (критично при push)
+      # Выводим вычисленные имена образов для отладки
+      - name: 🐞 Debug image names
+        run: |
+          echo "BACKEND_IMAGE: '${{ env.BACKEND_IMAGE }}'"
+          echo "FRONTEND_IMAGE: '${{ env.FRONTEND_IMAGE }}'"
+          if [[ "${{ env.BACKEND_IMAGE }}" == /* ]]; then
+            echo "❌ BACKEND_IMAGE starts with '/' — this will cause Docker tag error"
+            exit 1
+          fi
+          if [[ "${{ env.FRONTEND_IMAGE }}" == /* ]]; then
+            echo "❌ FRONTEND_IMAGE starts with '/' — this will cause Docker tag error"
+            exit 1
+          fi
+          echo "✅ Image names are valid"
+
+      # Валидация секретов только при push (когда они реально нужны)
       - name: Validate Docker Hub credentials
         if: github.event_name == 'push'
         run: |
@@ -44,19 +61,18 @@ jobs:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
-      # ── BUILD & PUSH / LOAD BACKEND ─────────────────────────────
+      # ── BUILD BACKEND ─────────────────────────────
       - name: Build backend image
         uses: docker/build-push-action@v5
         with:
           context: ./backend
-          # При push — пушим в реестр, при PR — только локально
           push: ${{ github.event_name == 'push' }}
           load: ${{ github.event_name != 'push' }}
           tags: |
             ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
             ${{ env.BACKEND_IMAGE }}:latest
 
-      # ── BUILD & PUSH / LOAD FRONTEND ────────────────────────────
+      # ── BUILD FRONTEND ────────────────────────────
       - name: Build frontend image
         uses: docker/build-push-action@v5
         with:
@@ -67,7 +83,7 @@ jobs:
             ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
             ${{ env.FRONTEND_IMAGE }}:latest
 
-      # ── ОСТАЛЬНЫЕ ШАГИ БЕЗ ИЗМЕНЕНИЙ ───────────────────────────
+      # ── Остальные шаги без изменений ───────────────────────────
       - name: 🌐 Create Docker network
         run: docker network create todo-network
 

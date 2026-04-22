@@ -20,37 +20,34 @@ jobs:
 
       # 🔑 Определяем корректные имена образов
       - name: Set Docker image names
-        id: images
+        env:
+          DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
         run: |
-          if [ -n "${{ secrets.DOCKER_HUB_USERNAME }}" ]; then
-            PREFIX="${{ secrets.DOCKER_HUB_USERNAME }}"
-          else
-            PREFIX=""
-          fi
-
-          if [ -n "$PREFIX" ]; then
-            BACKEND_IMAGE="${PREFIX}/todo-backend"
-            FRONTEND_IMAGE="${PREFIX}/todo-frontend"
+          # Удаляем пробельные символы в начале и конце
+          USERNAME=$(echo "$DOCKER_HUB_USERNAME" | xargs)
+          
+          if [ -n "$USERNAME" ]; then
+            BACKEND_IMAGE="${USERNAME}/todo-backend"
+            FRONTEND_IMAGE="${USERNAME}/todo-frontend"
           else
             BACKEND_IMAGE="todo-backend"
             FRONTEND_IMAGE="todo-frontend"
           fi
 
-          echo "BACKEND_IMAGE=$BACKEND_IMAGE" >> $GITHUB_ENV
-          echo "FRONTEND_IMAGE=$FRONTEND_IMAGE" >> $GITHUB_ENV
+          # Безопасная запись в GITHUB_ENV (только одна строка, без лишних пробелов)
+          printf "BACKEND_IMAGE=%s\n" "$BACKEND_IMAGE" >> $GITHUB_ENV
+          printf "FRONTEND_IMAGE=%s\n" "$FRONTEND_IMAGE" >> $GITHUB_ENV
 
           echo "BACKEND_IMAGE set to: $BACKEND_IMAGE"
           echo "FRONTEND_IMAGE set to: $FRONTEND_IMAGE"
 
           # Проверка: имя не должно начинаться со слеша
-          if [[ "$BACKEND_IMAGE" == /* ]]; then
-            echo "❌ BACKEND_IMAGE starts with '/' — this will cause Docker tag error"
-            exit 1
-          fi
-          if [[ "$FRONTEND_IMAGE" == /* ]]; then
-            echo "❌ FRONTEND_IMAGE starts with '/' — this will cause Docker tag error"
-            exit 1
-          fi
+          case "$BACKEND_IMAGE" in
+            /*) echo "❌ BACKEND_IMAGE starts with '/' — invalid tag"; exit 1 ;;
+          esac
+          case "$FRONTEND_IMAGE" in
+            /*) echo "❌ FRONTEND_IMAGE starts with '/' — invalid tag"; exit 1 ;;
+          esac
           echo "✅ Image names are valid"
 
       - name: 🔑 Login to Docker Hub

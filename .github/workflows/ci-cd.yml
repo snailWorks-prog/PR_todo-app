@@ -1,66 +1,69 @@
-name: CI/CD - Build, Test & Push
+name: CI/CD — Build, Test & Push
 
+# ─── Triggers ──────────────────────────────────────────────────────────────────
 on:
   push:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
 
+# ─── Environment variables ─────────────────────────────────────────────────────
 env:
   DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
   BACKEND_IMAGE:  ${{ secrets.DOCKER_HUB_USERNAME }}/todo-backend
   FRONTEND_IMAGE: ${{ secrets.DOCKER_HUB_USERNAME }}/todo-frontend
 
 jobs:
+  # ════════════════════════════════════════════════════════════════════════════
+  # JOB 1 — Build, Test, Push
+  # ════════════════════════════════════════════════════════════════════════════
   build-test-push:
+    name: Build → Test → Push
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout
-      - name: Checkout repository
+      # ── 1. Checkout source ────────────────────────────────────────────────
+      - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Debug — СМОТРИ СТРУКТУРУ
-      - name: Debug project structure
-        run: ls -R
-
-      # 3. Docker setup
-      - name: Set up Docker Buildx
+      # ── 2. Set up Docker Buildx (multi-platform builds) ──────────────────
+      - name: 🔧 Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 4. Login
-      - name: Login to Docker Hub
+      # ── 3. Login to Docker Hub ────────────────────────────────────────────
+      - name: 🔑 Login to Docker Hub
+        # Only push on push to main/master, not on pull requests
         if: github.event_name == 'push'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
-      # 5. BUILD (с защитой от ошибки)
+      # ── BUILD BACKEND ─────────────────────────────
       - name: Build backend image
-        run: |
-          if [ -d "backend" ]; then
-            docker build -t ${{ env.BACKEND_IMAGE }}:${{ github.sha }} -t ${{ env.BACKEND_IMAGE }}:latest ./backend
-          else
-            echo "❌ backend folder not found"
-            exit 1
-          fi
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: false
+          tags: |
+            ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+            ${{ env.BACKEND_IMAGE }}:latest
 
+      # ── BUILD FRONTEND ────────────────────────────
       - name: Build frontend image
-        run: |
-          if [ -d "frontend" ]; then
-            docker build -t ${{ env.FRONTEND_IMAGE }}:${{ github.sha }} -t ${{ env.FRONTEND_IMAGE }}:latest ./frontend
-          else
-            echo "❌ frontend folder not found"
-            exit 1
-          fi
-
-      # 6. Network
-      - name: Create network
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          push: false
+          tags: |
+            ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+            ${{ env.FRONTEND_IMAGE }}:latest
+      # ── 5. Create Docker network ──────────────────────────────────────────
+      - name: 🌐 Create Docker network
         run: docker network create todo-network
 
-      # 7. DB
-      - name: Start PostgreSQL
+      # ── 6. Start PostgreSQL ───────────────────────────────────────────────
+      - name: 🗄️ Start PostgreSQL
         run: |
           docker run -d \
             --name todo_db \
@@ -68,29 +71,46 @@ jobs:
             -e POSTGRES_DB=todoapp \
             -e POSTGRES_USER=postgres \
             -e POSTGRES_PASSWORD=postgres \
+            -p 5432:5432 \
             postgres:16-alpine
 
+          echo "⏳ Waiting for PostgreSQL to be ready..."
           for i in $(seq 1 20); do
-            docker exec todo_db pg_isready -U postgres && break
+            if docker exec todo_db pg_isready -U postgres > /dev/null 2>&1; then
+              echo "✅ PostgreSQL is ready (attempt $i)"
+              break
+            fi
+            echo "  Attempt $i/20 — not ready yet..."
             sleep 2
           done
 
-      # 8. Backend
-      - name: Start backend
+      # ── 7. Start Backend ──────────────────────────────────────────────────
+      - name: 🚀 Start backend container
         run: |
           docker run -d \
             --name backend \
             --network todo-network \
+            -e DB_HOST=todo_db \
+            -e DB_PORT=5432 \
+            -e DB_NAME=todoapp \
+            -e DB_USER=postgres \
+            -e DB_PASSWORD=postgres \
+            -e PORT=3001 \
             -p 3001:3001 \
             ${{ env.BACKEND_IMAGE }}:latest
 
+          echo "⏳ Waiting for backend to start..."
           for i in $(seq 1 20); do
-            curl -sf http://localhost:3001/api/tasks && break
+            if curl -sf http://localhost:3001/api/tasks > /dev/null 2>&1; then
+              echo "✅ Backend is ready (attempt $i)"
+              break
+            fi
+            echo "  Attempt $i/20 — not ready yet..."
             sleep 3
           done
 
-      # 9. Frontend
-      - name: Start frontend
+      # ── 8. Start Frontend ─────────────────────────────────────────────────
+      - name: 🎨 Start frontend container
         run: |
           docker run -d \
             --name todo_frontend \
@@ -98,35 +118,213 @@ jobs:
             -p 5173:5173 \
             ${{ env.FRONTEND_IMAGE }}:latest
 
+          echo "⏳ Waiting for frontend to start..."
           for i in $(seq 1 15); do
-            curl -sf http://localhost:5173 && break
+            if curl -sf http://localhost:5173 > /dev/null 2>&1; then
+              echo "✅ Frontend is ready (attempt $i)"
+              break
+            fi
+            echo "  Attempt $i/15 — not ready yet..."
             sleep 3
           done
 
-      # 10. Simple tests
-      - name: Test API
-        run: |
-          curl -f http://localhost:3001/api/tasks
+      # ── 9. Show running containers ────────────────────────────────────────
+      - name: 📋 Show running containers
+        run: docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
-      # 11. Push
-      - name: Push backend
+      # ── 10. API Health checks (curl tests) ───────────────────────────────
+      - name: 🧪 TEST — GET /api/tasks (list all tasks)
+        run: |
+          echo "→ GET /api/tasks"
+          RESPONSE=$(curl -sf -w "\n%{http_code}" http://localhost:3001/api/tasks)
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -1)
+          echo "  HTTP $HTTP_CODE"
+          echo "  Body: $BODY"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ Expected 200, got $HTTP_CODE"
+            exit 1
+          fi
+          echo "✅ PASS"
+
+      - name: 🧪 TEST — POST /api/tasks (create task)
+        run: |
+          echo "→ POST /api/tasks"
+          RESPONSE=$(curl -sf -w "\n%{http_code}" \
+            -X POST http://localhost:3001/api/tasks \
+            -H "Content-Type: application/json" \
+            -d '{"title":"CI Test Task","description":"Created by GitHub Actions","priority":"high","status":"pending"}')
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -1)
+          echo "  HTTP $HTTP_CODE"
+          echo "  Body: $BODY"
+          if [ "$HTTP_CODE" != "201" ]; then
+            echo "❌ Expected 201, got $HTTP_CODE"
+            exit 1
+          fi
+          # Extract task ID for next tests
+          TASK_ID=$(echo "$BODY" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+          echo "  Created task ID: $TASK_ID"
+          echo "TASK_ID=$TASK_ID" >> $GITHUB_ENV
+          echo "✅ PASS"
+
+      - name: 🧪 TEST — GET /api/tasks/:id (get by ID)
+        run: |
+          echo "→ GET /api/tasks/${{ env.TASK_ID }}"
+          RESPONSE=$(curl -sf -w "\n%{http_code}" http://localhost:3001/api/tasks/${{ env.TASK_ID }})
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -1)
+          echo "  HTTP $HTTP_CODE"
+          echo "  Body: $BODY"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ Expected 200, got $HTTP_CODE"
+            exit 1
+          fi
+          echo "✅ PASS"
+
+      - name: 🧪 TEST — PUT /api/tasks/:id (update task)
+        run: |
+          echo "→ PUT /api/tasks/${{ env.TASK_ID }}"
+          RESPONSE=$(curl -sf -w "\n%{http_code}" \
+            -X PUT http://localhost:3001/api/tasks/${{ env.TASK_ID }} \
+            -H "Content-Type: application/json" \
+            -d '{"title":"CI Test Task (updated)","description":"Updated by GitHub Actions","priority":"medium","status":"done"}')
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -1)
+          echo "  HTTP $HTTP_CODE"
+          echo "  Body: $BODY"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ Expected 200, got $HTTP_CODE"
+            exit 1
+          fi
+          echo "✅ PASS"
+
+      - name: 🧪 TEST — DELETE /api/tasks/:id (delete task)
+        run: |
+          echo "→ DELETE /api/tasks/${{ env.TASK_ID }}"
+          RESPONSE=$(curl -sf -w "\n%{http_code}" \
+            -X DELETE http://localhost:3001/api/tasks/${{ env.TASK_ID }})
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          echo "  HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ Expected 200, got $HTTP_CODE"
+            exit 1
+          fi
+          echo "✅ PASS"
+
+      - name: 🧪 TEST — GET /api/tasks/:id 404 (deleted task)
+        run: |
+          echo "→ GET /api/tasks/${{ env.TASK_ID }} (should be 404)"
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3001/api/tasks/${{ env.TASK_ID }})
+          echo "  HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" != "404" ]; then
+            echo "❌ Expected 404, got $HTTP_CODE"
+            exit 1
+          fi
+          echo "✅ PASS"
+
+      - name: 🧪 TEST — POST /api/tasks validation (missing title)
+        run: |
+          echo "→ POST /api/tasks without title (should be 400)"
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST http://localhost:3001/api/tasks \
+            -H "Content-Type: application/json" \
+            -d '{"description":"no title here"}')
+          echo "  HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" != "400" ]; then
+            echo "❌ Expected 400, got $HTTP_CODE"
+            exit 1
+          fi
+          echo "✅ PASS"
+
+      - name: 🧪 TEST — WebSocket stats endpoint
+        run: |
+          echo "→ GET /api/ws/stats"
+          RESPONSE=$(curl -sf -w "\n%{http_code}" http://localhost:3001/api/ws/stats)
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -1)
+          echo "  HTTP $HTTP_CODE"
+          echo "  Body: $BODY"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ Expected 200, got $HTTP_CODE"
+            exit 1
+          fi
+          echo "✅ PASS"
+
+      - name: 🧪 TEST — Frontend serves HTML
+        run: |
+          echo "→ GET http://localhost:5173"
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5173)
+          echo "  HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ Expected 200, got $HTTP_CODE"
+            exit 1
+          fi
+          echo "✅ PASS"
+
+      # ── 11. Print container logs on failure ──────────────────────────────
+      - name: 📜 Print backend logs (on failure)
+        if: failure()
+        run: |
+          echo "=== BACKEND LOGS ==="
+          docker logs backend || true
+          echo "=== DB LOGS ==="
+          docker logs todo_db || true
+          echo "=== FRONTEND LOGS ==="
+          docker logs todo_frontend || true
+
+      # ── 12. Test summary ──────────────────────────────────────────────────
+      - name: 📊 Test summary
+        run: |
+          echo "================================"
+          echo "  ALL TESTS PASSED ✅"
+          echo "================================"
+          echo "  Endpoints verified:"
+          echo "  GET    /api/tasks         200"
+          echo "  POST   /api/tasks         201"
+          echo "  GET    /api/tasks/:id     200"
+          echo "  PUT    /api/tasks/:id     200"
+          echo "  DELETE /api/tasks/:id     200"
+          echo "  GET    /api/tasks/:id     404 (after delete)"
+          echo "  POST   /api/tasks         400 (validation)"
+          echo "  GET    /api/ws/stats      200"
+          echo "  GET    http://localhost:5173  200"
+          echo "================================"
+
+      # ── 13. Push images to Docker Hub ────────────────────────────────────
+      - name: 📤 Push backend image to Docker Hub
         if: github.event_name == 'push'
         run: |
           docker push ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
           docker push ${{ env.BACKEND_IMAGE }}:latest
+          echo "✅ Backend pushed: ${{ env.BACKEND_IMAGE }}:latest"
 
-      - name: Push frontend
+      - name: 📤 Push frontend image to Docker Hub
         if: github.event_name == 'push'
         run: |
           docker push ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
           docker push ${{ env.FRONTEND_IMAGE }}:latest
+          echo "✅ Frontend pushed: ${{ env.FRONTEND_IMAGE }}:latest"
 
-      # 12. Cleanup
-      - name: Cleanup
+      # ── 14. Cleanup ───────────────────────────────────────────────────────
+      - name: 🧹 Stop and remove containers
         if: always()
         run: |
+          echo "Stopping containers..."
           docker stop todo_frontend backend todo_db 2>/dev/null || true
           docker rm todo_frontend backend todo_db 2>/dev/null || true
-          docker network rm todo-network 2>/dev/null || true
+          echo "✅ Containers removed"
+
+      - name: 🧹 Remove Docker network
+        if: always()
+        run: docker network rm todo-network 2>/dev/null || true
+
+      - name: 🧹 Remove Docker images
+        if: always()
+        run: |
+          docker rmi ${{ env.BACKEND_IMAGE }}:${{ github.sha }} 2>/dev/null || true
           docker rmi ${{ env.BACKEND_IMAGE }}:latest 2>/dev/null || true
+          docker rmi ${{ env.FRONTEND_IMAGE }}:${{ github.sha }} 2>/dev/null || true
           docker rmi ${{ env.FRONTEND_IMAGE }}:latest 2>/dev/null || true
+          docker image prune -f 2>/dev/null || true
+          echo "✅ Images removed"

@@ -1,10 +1,10 @@
-# 📋 ToDo App — Full Stack with Email (Task 1 + Task 2)
+# ToDo App - Full Stack with Email (Task 1 + Task 2)
 
-A complete ToDo List web application with SMTP/IMAP/POP3 email integration, fully containerized with Docker.
+
 
 ---
 
-## 🏗️ Architecture
+ Architecture
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -26,7 +26,7 @@ A complete ToDo List web application with SMTP/IMAP/POP3 email integration, full
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ```bash
 cd todo-app
@@ -42,7 +42,7 @@ docker compose down -v     # remove DB data too
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 todo-app/
@@ -67,7 +67,7 @@ todo-app/
 
 ---
 
-## 📡 REST API (Task 1)
+## REST API (Task 1)
 
 | Method | Endpoint     | Description      |
 |--------|--------------|------------------|
@@ -93,7 +93,7 @@ todo-app/
 
 ---
 
-## 📧 Email API (Task 2)
+## Email API (Task 2)
 
 ### SMTP — Send Email
 ```
@@ -115,7 +115,7 @@ POST /api/email/pop3/check
 
 ---
 
-## 🔧 Email Protocols
+## Email Protocols
 
 | Protocol | Purpose | Port | Library |
 |----------|---------|------|---------|
@@ -134,7 +134,7 @@ POST /api/email/pop3/check
 
 ---
 
-## 🎨 UI Features
+## UI 
 
 - Task list with status icons + priority color-coding
 - Create / Edit / Delete tasks via modal
